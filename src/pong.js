@@ -3,7 +3,7 @@ var app = app || {};
 (function(a) {
 
     var ctxY = 300,
-        ctxX = 400;
+        ctxX = 500;
 
     function Shape(x, y, w, h, fill) {
         this.x = x || 0;
@@ -33,6 +33,21 @@ var app = app || {};
     };
 
     Shape.prototype.onFrame = function () {};
+
+    function Letter(str) {
+        this.str = str || '00';
+    }
+
+    Letter.prototype = new Shape();
+    Letter.prototype.draw = function(ctx, str) {
+        ctx.font="40px icomoon";
+        ctx.fillText(this.str, this.x, this.y);
+    };
+    Letter.prototype.setLetter = function(str) {
+        this.str = str;
+    };
+
+    a.Letter = Letter;
 
     function CanvasState(canvas) {
         this.canvas = canvas;
@@ -68,6 +83,15 @@ var app = app || {};
 
     a.CanvasState = CanvasState;
 
+    function Field() {
+        this.setSize(5, ctxY);
+        this.setPosition((ctxX / 2) - (this.w / 2), 0);
+        this.setColor('aqua');
+    }
+    Field.prototype = new Shape();
+    a.Field = Field;
+
+
     function Raquet(){
         this.setSize(5,50);
         this.setColor('pink');
@@ -79,31 +103,30 @@ var app = app || {};
     ComputerRaquet.prototype = new Raquet();
 
     ComputerRaquet.prototype.onFrame = function () {
-        if (this.direction) {
+        if (this.direction && (this.y + this.h) < ctxY) {
             this.y++;
-        } else {
+        } else if (!this.direction && this.y > 0) {
             this.y--;
         }
-        (this.y <= 0 && !this.direction) && (this.direction = true);
-        (this.y >= ctxY && this.direction) && (this.direction = false);
-
     };
 
     a.ComputerRaquet = ComputerRaquet;
 
     function PlayerRaquet() {
-        var _self = this;
-        this.setPosition(300, 0);
+        this.setPosition(ctxX - this.w, 0);
         document.addEventListener('keyup', _.bind(this.onKeyUp, this));
         document.addEventListener('keydown', _.bind(this.onKeyDown, this));
+        this.speedFactor = 1;
     }
     PlayerRaquet.prototype = new Raquet();
     PlayerRaquet.prototype.onKeyDown = function(ev) {
         switch(ev.keyCode) {
             case 37:
+                (this.direction || this.direction === null) && (this.speedFactor = 1);
                 this.direction = false;
                 break;
             case 39:
+                !this.direction && (this.speedFactor = 1);
                 this.direction = true;
                 break;
         }
@@ -117,10 +140,11 @@ var app = app || {};
         }
     };
     PlayerRaquet.prototype.onFrame = function () {
-        if (this.direction && this.y <= ctxY) {
-            this.y++;
+        this.speedFactor += 0.1;
+        if (this.direction && (this.y + this.h) <= ctxY) {
+            this.y += this.speedFactor;
         } else if (this.direction === false && this.y >= 0) {
-            this.y--;
+            this.y -= this.speedFactor;
         }
     };
 
@@ -139,6 +163,8 @@ var app = app || {};
 
     Ball.prototype = new Shape();
 
+    Ball.prototype.yFactor = 1;
+
     Ball.prototype.invertX = function() {
         this.direction.x = !this.direction.x;
     };
@@ -154,9 +180,9 @@ var app = app || {};
             this.x--;
         }
         if (this.direction.y) {
-            this.y++;
+            this.y += this.yFactor;
         } else {
-            this.y--;
+            this.y -= this.yFactor;
         }
     };
 
@@ -176,9 +202,10 @@ var app = app || {};
 
     Game.prototype.init = function () {
 
-        var computerRaquet, playerRaquet, ball;
+        var computerRaquet, playerRaquet, ball, scoreComputer, scorePlayer;
 
         this.state = new a.CanvasState(this.ctx);
+
 
         computerRaquet = new a.ComputerRaquet();
         this.registerObject(computerRaquet);
@@ -195,11 +222,35 @@ var app = app || {};
 
         this.state.addShape(ball);
 
+
+        this.field = new a.Field();
+        this.registerObject(this.field);
+        this.state.addShape(this.field);
+
+        scoreComputer = new a.Letter();
+        scoreComputer.setPosition(this.ctx.width / 4 - 30, 60);
+        this.registerObject(scoreComputer);
+        this.state.addShape(scoreComputer);
+
+        scorePlayer = new a.Letter();
+        scorePlayer.setPosition(this.ctx.width / 4 * 3 - 30, 60);
+        this.registerObject(scorePlayer);
+        this.state.addShape(scorePlayer);
+
         this.ball = ball;
         this.computerRaquet = computerRaquet;
         this.playerRaquet = playerRaquet;
+        this.scoreComputer = scoreComputer;
+        this.scorePlayer = scorePlayer;
 
         this.animLoop();
+    };
+
+    Game.prototype.guideComputerPlayer = function () {
+        var ballHeight = this.ball.y,
+            midH = this.computerRaquet.y + this.computerRaquet.h / 2;
+
+        this.computerRaquet.direction = midH < ballHeight;
     };
 
 
@@ -221,6 +272,8 @@ var app = app || {};
             if ((ballHeight + ballH) >= this.computerRaquet.y && ballHeight <= (this.computerRaquet.y + this.computerRaquet.h)) {
                 // bouncing on the computer raquet
                 this.ball.invertX();
+                // if hitting on the corner, deviate it slighly
+                this.checkCorner(this.computerRaquet);
                 return;
             }
         } else if (ballDepth + ballW >= (this.playerRaquet.x) && (ballDepth + ballW) <= (this.playerRaquet.x + this.playerRaquet.w)) {
@@ -228,28 +281,50 @@ var app = app || {};
             if ((ballHeight + ballH) >= this.playerRaquet.y && ballHeight <= (this.playerRaquet.y + this.playerRaquet.h)) {
                 // bouncing on the computer raquet
                 this.ball.invertX();
+                this.checkCorner(this.playerRaquet);
                 return;
             }
         } else {
             // check impact on walls
-            if (ballHeight === 0 || ballHeight + ballH === this.ctx.height) {
+            if (((ballHeight <= 0 && !this.ball.direction.y)) || (((ballHeight + ballH) >= this.ctx.height) && this.ball.direction.y)) {
                 this.ball.invertY();
                 return;
             }
         }
     };
 
+    Game.prototype.checkCorner = function(raquet) {
+        var ballDepth = this.ball.x,
+            ballHeight = this.ball.y,
+            ballW = this.ball.w,
+            ballH = this.ball.h;
+        if (Math.abs((ballHeight + ballH / 2) - (raquet.y + raquet.h / 2)) > raquet.h / 3) {
+            this.ball.yFactor = 1.3;
+        } else {
+            this.ball.yFactor = 1;
+        }
+    };
+
     Game.prototype.markPoint = function(forPlayer) {
         if (forPlayer) {
             this.score.player++;
+            this.scorePlayer.setLetter(this.formatScore(this.score.player));
         } else {
             this.score.computer++;
+            this.scoreComputer.setLetter(this.formatScore(this.score.computer));
         }
         this.restartBall();
     };
 
+    Game.prototype.formatScore = function(score) {
+        if (score > 9) {
+            return score;
+        }
+        return 0 + score.toString();
+    };
+
     Game.prototype.restartBall = function () {
-        this.ball.setPosition(100, 100);
+        this.ball.setPosition(this.ctx.width / 2 - this.ball.w / 2, this.ctx.height / 2 - this.ball.h / 2);
         this.ball.direction = {
             x : Math.random()<.5,
             y : Math.random()<.5
@@ -261,7 +336,7 @@ var app = app || {};
     Game.prototype.registerObject = function (obj, params) {
         this.elementsToAnimate.push({
             obj : obj,
-            params : params || undefined
+            params : params
         })
     };
 
@@ -282,6 +357,7 @@ var app = app || {};
 
         onClock = _.bind(function() {
             this.checkImpact();
+            this.guideComputerPlayer();
             this.animateElements();
             clockInterval = window.requestAnimationFrame(onClock);
         }, this);
